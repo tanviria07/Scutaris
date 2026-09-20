@@ -1,9 +1,14 @@
 .env
+.env.local
 .venv/
 venv/
+node_modules/
 __pycache__/
+*.pyc
 *.py[cod]
 .pytest_cache/
+.next/
+.vercel
 data/raw/*.json
 data/normalized/*.json
 .DS_Store
