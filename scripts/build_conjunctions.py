@@ -27,7 +27,6 @@ from backend.config import INDEX_CONJUNCTIONS, INDEX_DEBRIS, INDEX_SATELLITES, g
 from backend.embeddings import active_provider, embed_batch
 from backend.es_client import cluster_banner, count_docs, get_es_client
 from backend.ingest import EARTH_RADIUS_KM
-from contracts.schemas import classify_risk
 
 logger = logging.getLogger("scutaris.build_conjunctions")
 
@@ -41,11 +40,14 @@ ISS_NORAD = "25544"
 ISS_RESERVE = 20
 ISS_FORCED_CRITICAL = 5
 ISS_FORCED_HIGH = 15
-# MVP HEURISTIC: demo risk mix for the globe/search UI, not FIX 6 geometry.
-SLICE_CRITICAL = 50
-SLICE_HIGH = 250
-SLICE_MEDIUM = 750
-SLICE_LOW = 3950
+ISS_COVERAGE_MISS_KM = 40.0
+#: Promote closest pairs only when geometry yields fewer than this many critical.
+MIN_CRITICAL = 20
+PC_CRITICAL = 1e-4
+PC_SIGMA_KM = 5.0
+MISS_CRITICAL_KM = 2.0
+MISS_HIGH_KM = 10.0
+MISS_MEDIUM_KM = 40.0
 SOURCE_FIELDS = (
     "norad_id",
     "name",
@@ -130,10 +132,35 @@ def approximate_miss_km(primary: Mapping[str, Any], secondary: Mapping[str, Any]
 def heuristic_pc(miss_km: float) -> float:
     """Collision probability stand-in from miss distance.
 
-    # MVP HEURISTIC: heuristic Pc = exp(-miss_km / 5). Not a covariance-based
-    # probability of collision.
+    # MVP HEURISTIC: crude Pc estimate using a 5 km combined position uncertainty.
+    # Real value uses Chan B-plane integration with propagated covariance.
+    # This formula produces values that decrease sharply with miss distance,
+    # so risk labels line up with what operators would expect.
     """
-    return math.exp(-miss_km / 5.0)
+    sigma_km = PC_SIGMA_KM
+    return float(math.exp(-0.5 * (miss_km ** 2) / (sigma_km ** 2)))
+
+
+def assign_risk(miss_km: float, pc: float) -> str:
+    """Local geometry bands for the builder. Does not change contracts.classify_risk.
+
+    miss_km < 2     -> critical
+    miss_km < 10    -> high
+    miss_km < 40    -> medium
+    miss_km >= 40   -> low
+    Pc > 1e-4 escalates to critical regardless of miss distance.
+    """
+    if miss_km < MISS_CRITICAL_KM:
+        risk = "critical"
+    elif miss_km < MISS_HIGH_KM:
+        risk = "high"
+    elif miss_km < MISS_MEDIUM_KM:
+        risk = "medium"
+    else:
+        risk = "low"
+    if pc > PC_CRITICAL:
+        risk = "critical"
+    return risk
 
 
 def _usable(doc: Mapping[str, Any]) -> bool:
@@ -177,17 +204,8 @@ def _refresh_text_blob(doc: dict[str, Any]) -> None:
 
 
 def _set_risk(doc: dict[str, Any], level: str) -> None:
-    """Overwrite `risk_level`/`pc`/`text_blob` for a demo-assigned band."""
+    """Overwrite `risk_level`/`text_blob` without faking Pc."""
     doc["risk_level"] = level
-    pc = float(doc.get("pc") or 0.0)
-    if level == "critical":
-        doc["pc"] = max(pc, 2.0e-4)
-    elif level == "high":
-        doc["pc"] = min(max(pc, 5.0e-5), 9.0e-5)
-    elif level == "medium":
-        doc["pc"] = min(max(pc, 1.0e-6), 5.0e-6)
-    else:
-        doc["pc"] = min(pc if pc > 0 else 1.0e-8, 1.0e-8)
     _refresh_text_blob(doc)
 
 
@@ -199,7 +217,7 @@ def _pair_doc(
 ) -> dict[str, Any]:
     """Build one conjunction document (no embedding yet)."""
     pc = heuristic_pc(miss_km)
-    risk_level = classify_risk(miss_km, pc)
+    risk_level = assign_risk(miss_km, pc)
     primary_norad = str(sat["norad_id"])
     secondary_norad = str(deb["norad_id"])
     primary_name = str(sat.get("name") or f"NORAD {primary_norad}")
@@ -370,51 +388,48 @@ def cap_with_iss_reserve(
     return selected
 
 
-def apply_global_risk_slice(docs: list[dict[str, Any]]) -> None:
-    """Assign the demo risk mix to the non-ISS majority of the 5,000.
+def apply_rank_fallback(docs: list[dict[str, Any]], min_critical: int = MIN_CRITICAL) -> None:
+    """Promote closest pairs to critical if geometry produced too few.
 
-    # MVP HEURISTIC: slice by miss_km rank into ~50 critical / ~250 high /
-    # ~750 medium / ~3950 low. Not FIX 6 geometry.
+    # MVP HEURISTIC: rank-based fallback so the demo still has a critical band
+    # when snapshot geometry has no close approaches. Pc is left unchanged.
     """
-    other = [doc for doc in docs if doc["primary_norad"] != ISS_NORAD]
-    other.sort(key=lambda row: (row["miss_km"], row["primary_norad"], row["secondary_norad"]))
-    n_critical = max(0, SLICE_CRITICAL - ISS_FORCED_CRITICAL)
-    n_high = max(0, SLICE_HIGH - ISS_FORCED_HIGH)
-    n_medium = SLICE_MEDIUM
-    bands = (
-        ("critical", n_critical),
-        ("high", n_high),
-        ("medium", n_medium),
-        ("low", len(other)),
-    )
-    cursor = 0
-    for level, count in bands:
-        chunk = other[cursor : cursor + count]
-        for doc in chunk:
-            _set_risk(doc, level)
-        cursor += len(chunk)
+    critical = [doc for doc in docs if doc["risk_level"] == "critical"]
+    if len(critical) >= min_critical:
+        print(
+            f"  rank fallback skipped "
+            f"({len(critical)} geometry-critical >= {min_critical})"
+        )
+        return
+    needed = min_critical - len(critical)
+    rest = [doc for doc in docs if doc["risk_level"] != "critical"]
+    rest.sort(key=lambda row: (row["miss_km"], row["primary_norad"], row["secondary_norad"]))
+    promoted = rest[:needed]
+    for doc in promoted:
+        _set_risk(doc, "critical")
     print(
-        f"  global slice applied on {len(other)} non-ISS docs "
-        f"(crit={n_critical} high={n_high} med={n_medium} "
-        f"low={max(0, len(other) - n_critical - n_high - n_medium)})"
+        f"  rank fallback: promoted {len(promoted)} closest pairs to critical "
+        f"(now {len(critical) + len(promoted)})"
     )
 
 
 def apply_iss_coverage(docs: list[dict[str, Any]]) -> None:
-    """Force high/critical ISS rows for the golden query.
+    """Prefer high/critical labels on ISS pairs that are actually close.
 
-    # MVP HEURISTIC: forced ISS coverage for the golden demo query
-    # "show me high-risk debris near the ISS". Closest 5 ISS pairs → critical,
-    # next 15 → high. Overrides FIX 6 for those twenty documents only.
+    # MVP HEURISTIC: golden-query ISS coverage, but only for pairs whose miss
+    # is already inside the 40 km screening volume. Distant ISS pairs keep
+    # their geometry-derived risk_level so "critical at 431 km" cannot return.
     """
     iss = [doc for doc in docs if doc["primary_norad"] == ISS_NORAD]
     iss.sort(key=lambda row: (row["miss_km"], row["secondary_norad"]))
-    for index, doc in enumerate(iss[: ISS_FORCED_CRITICAL + ISS_FORCED_HIGH]):
+    close = [doc for doc in iss if float(doc["miss_km"]) < ISS_COVERAGE_MISS_KM]
+    for index, doc in enumerate(close[: ISS_FORCED_CRITICAL + ISS_FORCED_HIGH]):
         _set_risk(doc, "critical" if index < ISS_FORCED_CRITICAL else "high")
+    n_crit = min(len(close), ISS_FORCED_CRITICAL)
+    n_high = max(0, min(len(close) - ISS_FORCED_CRITICAL, ISS_FORCED_HIGH))
     print(
-        f"  ISS coverage: {min(len(iss), ISS_FORCED_CRITICAL)} critical, "
-        f"{max(0, min(len(iss) - ISS_FORCED_CRITICAL, ISS_FORCED_HIGH))} high "
-        f"(iss_in_set={len(iss)})"
+        f"  ISS coverage: {n_crit} critical, {n_high} high "
+        f"(close_iss={len(close)} iss_in_set={len(iss)})"
     )
 
 
@@ -514,8 +529,8 @@ async def run(args: argparse.Namespace) -> int:
     print(f"  threshold_used={threshold_used}")
     cap = args.max_index or DEFAULT_INDEX_CAP
     docs = cap_with_iss_reserve(docs, cap=cap)
-    apply_global_risk_slice(docs)
     apply_iss_coverage(docs)
+    apply_rank_fallback(docs)
     if not docs:
         print("ERROR: no conjunctions produced at any threshold")
         return 1
