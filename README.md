@@ -67,4 +67,3 @@ Today, operators manually check dozens of government databases, spreadsheets, an
 - **Messy data → insight → action** — real orbital catalog to validated maneuver recommendation
 - **Agent tools** — 5 LangGraph tools query Elasticsearch directly via `es_client.py`
 
-## Architecture
