@@ -120,7 +120,6 @@ def create_index(name: str, mapping: dict[str, Any], recreate: bool) -> str:
     client.indices.create(
         index=name,
         mappings=mapping,
-        settings={"number_of_shards": 1, "number_of_replicas": 0},
     )
     return "recreated" if exists else "created"
 
