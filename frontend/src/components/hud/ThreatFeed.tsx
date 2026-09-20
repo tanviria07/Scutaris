@@ -1,36 +1,83 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import type { SearchHit } from "@contracts";
 import { Panel } from "@/components/ui/Panel";
 import { Badge } from "@/components/ui/Badge";
 import { useMissionStore, simTimeMs } from "@/lib/store/useMissionStore";
-import { useFilteredConjunctions } from "@/lib/store/selectors";
+import {
+  useActiveSearchHits,
+  useFilteredConjunctions,
+  useObjectIndex,
+} from "@/lib/store/selectors";
+import { indexLabel } from "@/lib/data/searchHits";
 import { ThreatFeedItem } from "./ThreatFeedItem";
+
+function LiveHitRow({
+  hit,
+  onSelect,
+}: {
+  hit: SearchHit;
+  onSelect: (noradId: string | null) => void;
+}) {
+  const label = hit.name ?? hit.norad_id ?? hit.id ?? "Untitled hit";
+  const meta = [
+    indexLabel(hit.index),
+    hit.norad_id ? `NORAD ${hit.norad_id}` : null,
+    hit.risk_level,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onSelect(hit.norad_id)}
+        className="w-full px-3 py-2 text-left transition-colors hover:bg-white/[0.04]"
+      >
+        <p className="truncate font-mono text-[11px] text-ink">{label}</p>
+        <p className="mt-0.5 truncate font-mono text-[9px] tracking-wide text-ink-faint uppercase">
+          {meta}
+        </p>
+        {hit.snippet ? (
+          <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-ink-dim">
+            {hit.snippet}
+          </p>
+        ) : null}
+      </button>
+    </li>
+  );
+}
 
 /**
  * Conjunction feed, ordered most severe first.
  *
- * This is the accessible parallel to picking objects in the 3D scene: it is a
- * real listbox, so arrow keys move the active row, Home/End jump, and Enter or
- * Space commits the selection to the same store the canvas writes to.
+ * During an applied search this lists live SearchHits (name, index, snippet)
+ * rather than pairing them with seeded miss / Pc / TCA values.
  */
 export function ThreatFeed() {
-  const entries = useFilteredConjunctions();
+  const seeded = useFilteredConjunctions();
+  const liveHits = useActiveSearchHits();
+  const objectIndex = useObjectIndex();
   const selectedConjunctionId = useMissionStore(
     (state) => state.selectedConjunctionId,
   );
   const selectConjunction = useMissionStore((state) => state.selectConjunction);
+  const select = useMissionStore((state) => state.select);
   const setHovered = useMissionStore((state) => state.setHovered);
   const offsetMinutes = useMissionStore((state) => state.timeline.offsetMinutes);
   const loading = useMissionStore((state) => state.loading);
+  const searchLoading = useMissionStore((state) => state.searchLoading);
   const referenceMs = simTimeMs(offsetMinutes);
+
+  const searchActive = liveHits !== null;
+  const entries = searchActive ? [] : seeded;
+  const count = searchActive ? liveHits.length : seeded.length;
 
   const [requestedIndex, setActiveIndex] = useState(0);
   const itemRefs = useRef<(HTMLLIElement | null)[]>([]);
 
-  // Clamp during render rather than correcting in an effect: filters can
-  // shrink the list at any time, and an effect would leave the roving focus
-  // pointing past the end for one frame.
   const activeIndex = Math.min(requestedIndex, Math.max(0, entries.length - 1));
 
   const commit = useCallback(
@@ -75,19 +122,45 @@ export function ThreatFeed() {
     [activeIndex, commit, entries.length],
   );
 
+  function selectLiveHit(noradId: string | null) {
+    if (noradId && objectIndex.has(noradId)) {
+      select(noradId, null);
+    }
+  }
+
+  let emptyCopy: string | null = null;
+  if (searchActive && liveHits.length === 0) {
+    emptyCopy = searchLoading
+      ? "Searching Elasticsearch…"
+      : "No Elasticsearch hits for this query.";
+  } else if (!searchActive && entries.length === 0) {
+    emptyCopy = loading
+      ? "Loading conjunction screening…"
+      : "No conjunctions match the active filters.";
+  }
+
   return (
     <Panel
-      title="Threat feed"
+      title={searchActive ? "Search hits" : "Threat feed"}
       as="section"
       className="min-h-0 flex-1"
-      action={<Badge tone={entries.length > 0 ? "teal" : "neutral"}>{entries.length}</Badge>}
+      action={<Badge tone={count > 0 ? "teal" : "neutral"}>{count}</Badge>}
     >
-      {entries.length === 0 ? (
-        <p className="p-3 font-mono text-[10px] text-ink-faint">
-          {loading
-            ? "Loading conjunction screening…"
-            : "No conjunctions match the active filters."}
-        </p>
+      {searchActive && liveHits.length > 0 ? (
+        <ul
+          aria-label="Elasticsearch search hits"
+          className="scut-scroll min-h-0 flex-1 divide-y divide-[var(--color-hairline)] overflow-y-auto"
+        >
+          {liveHits.map((hit, index) => (
+            <LiveHitRow
+              key={`${hit.index}:${hit.id ?? hit.norad_id ?? index}`}
+              hit={hit}
+              onSelect={selectLiveHit}
+            />
+          ))}
+        </ul>
+      ) : emptyCopy ? (
+        <p className="p-3 font-mono text-[10px] text-ink-faint">{emptyCopy}</p>
       ) : (
         <ul
           role="listbox"

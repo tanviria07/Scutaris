@@ -14,6 +14,7 @@ import type {
   TimelineState,
 } from "@/lib/types/ui";
 import { EMPTY_FILTERS } from "@/lib/types/ui";
+import type { SearchResponse } from "@contracts";
 import { SIM_EPOCH_MS } from "@/lib/data/fixtures/rng";
 
 /**
@@ -33,6 +34,16 @@ interface MissionState {
   conjunctions: Conjunction[];
   loading: boolean;
   loadError: string | null;
+
+  // --- Live / mock search (does not replace the seeded catalogue) ---
+  searchLoading: boolean;
+  searchError: string | null;
+  searchResponse: SearchResponse | null;
+  searchAppliedQuery: string;
+  searchHitNoradIds: string[];
+  searchHitDocIds: string[];
+  /** True when live HTTP failed and results came from the local mock service. */
+  searchFallback: boolean;
 
   // --- Interaction ---
   selectedNoradId: string | null;
@@ -62,6 +73,17 @@ interface MissionState {
   setQuery: (query: string) => void;
   setFilters: (partial: Partial<Filters>) => void;
   resetFilters: () => void;
+  beginSearch: () => void;
+  setSearchResult: (payload: {
+    query: string;
+    response: SearchResponse;
+    hitNoradIds: string[];
+    hitDocIds: string[];
+    fallback: boolean;
+    error: string | null;
+  }) => void;
+  setSearchError: (message: string) => void;
+  clearSearch: () => void;
 
   setTimelineOffset: (offsetMinutes: number) => void;
   togglePlaying: () => void;
@@ -81,12 +103,24 @@ const INITIAL_TIMELINE: TimelineState = {
   speed: 10,
 };
 
+const CLEARED_SEARCH = {
+  searchLoading: false,
+  searchError: null,
+  searchResponse: null,
+  searchAppliedQuery: "",
+  searchHitNoradIds: [] as string[],
+  searchHitDocIds: [] as string[],
+  searchFallback: false,
+};
+
 export const useMissionStore = create<MissionState>((set) => ({
   satellites: [],
   debris: [],
   conjunctions: [],
   loading: true,
   loadError: null,
+
+  ...CLEARED_SEARCH,
 
   selectedNoradId: null,
   selectedConjunctionId: null,
@@ -116,13 +150,59 @@ export const useMissionStore = create<MissionState>((set) => ({
 
   setHovered: (hoveredNoradId) => set({ hoveredNoradId }),
 
+  // A selection made against the previous result set is never valid for a new
+  // one, so changing the query drops it before the next response arrives.
   setQuery: (query) =>
-    set((state) => ({ filters: { ...state.filters, query } })),
+    set((state) => ({
+      filters: { ...state.filters, query },
+      selectedNoradId: null,
+      selectedConjunctionId: null,
+      ...(query.trim() ? {} : CLEARED_SEARCH),
+    })),
 
   setFilters: (partial) =>
     set((state) => ({ filters: { ...state.filters, ...partial } })),
 
-  resetFilters: () => set({ filters: EMPTY_FILTERS }),
+  resetFilters: () =>
+    set({
+      filters: EMPTY_FILTERS,
+      selectedNoradId: null,
+      selectedConjunctionId: null,
+      ...CLEARED_SEARCH,
+    }),
+
+  beginSearch: () => set({ searchLoading: true, searchError: null }),
+
+  setSearchResult: ({
+    query,
+    response,
+    hitNoradIds,
+    hitDocIds,
+    fallback,
+    error,
+  }) =>
+    set({
+      searchLoading: false,
+      searchError: error,
+      searchResponse: response,
+      searchAppliedQuery: query,
+      searchHitNoradIds: hitNoradIds,
+      searchHitDocIds: hitDocIds,
+      searchFallback: fallback,
+    }),
+
+  setSearchError: (searchError) =>
+    set({
+      searchLoading: false,
+      searchError,
+      searchResponse: null,
+      searchAppliedQuery: "",
+      searchHitNoradIds: [],
+      searchHitDocIds: [],
+      searchFallback: false,
+    }),
+
+  clearSearch: () => set(CLEARED_SEARCH),
 
   setTimelineOffset: (offsetMinutes) =>
     set((state) => ({

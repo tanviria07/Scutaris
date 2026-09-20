@@ -7,7 +7,7 @@ import type { SearchHit, SearchRequest, SearchResponse } from "@contracts";
 import type { ThreatExplanation } from "@/lib/types/ui";
 import { RISK_LABEL } from "@/lib/orbital/risk";
 import { formatUtc } from "@/lib/utils/format";
-import type { ScutarisDataService } from "./dataService";
+import type { ScutarisDataService, SearchInit } from "./dataService";
 import { MOCK_SATELLITES } from "./fixtures/satellites";
 import { MOCK_DEBRIS } from "./fixtures/debris";
 import { MOCK_CONJUNCTIONS } from "./fixtures/conjunctions";
@@ -103,7 +103,10 @@ export const mockDataService: ScutarisDataService = {
     return constraintsByNorad.get(noradId) ?? null;
   },
 
-  async search(request: SearchRequest): Promise<SearchResponse> {
+  async search(
+    request: SearchRequest,
+    _init?: SearchInit,
+  ): Promise<SearchResponse> {
     const started =
       typeof performance !== "undefined" ? performance.now() : 0;
 

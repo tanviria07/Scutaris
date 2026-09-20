@@ -7,14 +7,18 @@ import type {
 import type { SearchRequest, SearchResponse } from "@contracts";
 import type { ThreatExplanation } from "@/lib/types/ui";
 import { isLiveApiEnabled } from "@/lib/config/env";
+import { httpDataService } from "./httpDataService";
 import { mockDataService } from "./mockDataService";
+
+export interface SearchInit {
+  signal?: AbortSignal;
+}
 
 /**
  * The single seam between the UI and its data.
  *
- * Every component reads through `getDataService()`. Phase 2 adds an
- * `httpDataService` that talks to FastAPI and returns it from here when
- * `NEXT_PUBLIC_API_BASE_URL` is set; no component changes.
+ * `search()` is live when the public API base URL is set; catalogue lists
+ * remain seeded until the backend grows bulk-read endpoints.
  */
 export interface ScutarisDataService {
   readonly name: "mock" | "http";
@@ -24,19 +28,15 @@ export interface ScutarisDataService {
   listConjunctions(): Promise<Conjunction[]>;
   getConstraints(noradId: string): Promise<ConstraintsDoc | null>;
 
-  /** Elastic seam. Phase 1 filters locally and reports `mock: true`. */
-  search(request: SearchRequest): Promise<SearchResponse>;
+  search(request: SearchRequest, init?: SearchInit): Promise<SearchResponse>;
 
-  /** Grok Imagine seam. Phase 1 returns canned prose and a null image. */
+  /** Grok Imagine seam. Still mock — not wired in this search-only change. */
   explainThreat(conjunction: Conjunction): Promise<ThreatExplanation>;
 }
 
 export function getDataService(): ScutarisDataService {
   if (isLiveApiEnabled) {
-    // Phase 2: return httpDataService once the FastAPI contract is wired.
-    // Until then the mock is the only implementation, so fall through
-    // rather than fail at runtime.
-    return mockDataService;
+    return httpDataService;
   }
   return mockDataService;
 }

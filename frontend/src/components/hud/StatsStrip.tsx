@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useMissionStore } from "@/lib/store/useMissionStore";
 import {
+  useActiveSearchHits,
   useFilteredConjunctions,
   useFilteredObjects,
 } from "@/lib/store/selectors";
@@ -15,6 +16,7 @@ export function StatsStrip() {
   );
   const objects = useFilteredObjects();
   const conjunctions = useFilteredConjunctions();
+  const liveHits = useActiveSearchHits();
 
   const summary = useMemo(() => {
     let critical = 0;
@@ -33,6 +35,8 @@ export function StatsStrip() {
   }, [conjunctions]);
 
   const filtered = objects.length !== totalObjects;
+  const visualizationGap =
+    liveHits !== null && liveHits.length > 0 && objects.length === 0;
 
   return (
     <div className="scut-panel pointer-events-auto mx-3 flex w-fit flex-wrap items-center divide-x divide-[var(--color-hairline)]">
@@ -44,7 +48,13 @@ export function StatsStrip() {
             : formatInt(totalObjects)
         }
         tone="teal"
-        hint={filtered ? "Matching active filters, out of the full catalogue" : undefined}
+        hint={
+          visualizationGap
+            ? "Seeded globe has no orbit match for these live hits"
+            : filtered
+              ? "Matching active filters, out of the seeded catalogue"
+              : undefined
+        }
       />
       <Stat label="Conjunctions" value={formatInt(conjunctions.length)} />
       <Stat

@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCatalogue } from "@/lib/hooks/useCatalogue";
+import { useSelectionSync } from "@/lib/hooks/useSelectionSync";
 import { useTimelinePlayback } from "@/lib/hooks/useTimelinePlayback";
 import { useMissionStore } from "@/lib/store/useMissionStore";
 import { useSelectedObject } from "@/lib/store/selectors";
@@ -34,6 +35,7 @@ const GlobeCanvas = dynamic(
 export function MissionShell() {
   useCatalogue();
   useTimelinePlayback();
+  useSelectionSync();
 
   const selected = useSelectedObject();
   const loadError = useMissionStore((state) => state.loadError);

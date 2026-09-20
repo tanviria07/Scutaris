@@ -7,37 +7,26 @@ import type {
   ResolvedConjunction,
 } from "@/lib/types/orbital";
 import type { Filters } from "@/lib/types/ui";
+import type { SearchHit } from "@contracts";
 import { RISK_SEVERITY } from "@/lib/orbital/risk";
+import { hitMatchesChips } from "@/lib/data/searchHits";
 import { useMissionStore } from "./useMissionStore";
 
 /**
  * Derived views over the store.
  *
- * Filtering runs over ~950 objects on every keystroke, so each hook memoizes
- * on the narrowest possible dependency set.
+ * Chip filters always apply. Text search applies only through SearchResponse
+ * hit IDs — never by passing a natural-language sentence through substring
+ * matching — so the globe stays on the seeded catalogue.
  */
-
-function matchesText(object: OrbitalObject, query: string): boolean {
-  if (!query) return true;
-  const needle = query.toLowerCase().trim();
-  if (!needle) return true;
-
-  if (object.norad_id.includes(needle)) return true;
-  if (object.name.toLowerCase().includes(needle)) return true;
-  if (object.orbit_class.toLowerCase() === needle) return true;
-  if (object.kind === "debris") {
-    if ((object.parent_object ?? "").toLowerCase().includes(needle)) return true;
-    if ((object.group ?? "").toLowerCase().includes(needle)) return true;
-  }
-  return (object.text_blob ?? "").toLowerCase().includes(needle);
-}
 
 export function filterObjects(
   objects: readonly OrbitalObject[],
   filters: Filters,
   riskByNorad: ReadonlyMap<string, number>,
+  searchNoradIds: ReadonlySet<string> | null,
 ): OrbitalObject[] {
-  const { orbitClasses, kinds, riskLevels, query } = filters;
+  const { orbitClasses, kinds, riskLevels } = filters;
 
   return objects.filter((object) => {
     if (kinds.length > 0 && !kinds.includes(object.kind)) return false;
@@ -54,7 +43,10 @@ export function filterObjects(
       );
       if (!allowed) return false;
     }
-    return matchesText(object, query);
+    if (searchNoradIds) {
+      return searchNoradIds.has(object.norad_id);
+    }
+    return true;
   });
 }
 
@@ -94,30 +86,55 @@ export function useObjectIndex(): ReadonlyMap<string, OrbitalObject> {
   );
 }
 
+function useAppliedSearchNorads(): ReadonlySet<string> | null {
+  const query = useMissionStore((state) => state.filters.query);
+  const appliedQuery = useMissionStore((state) => state.searchAppliedQuery);
+  const noradIds = useMissionStore((state) => state.searchHitNoradIds);
+  const response = useMissionStore((state) => state.searchResponse);
+
+  return useMemo(() => {
+    const trimmed = query.trim();
+    if (!trimmed || !response || appliedQuery !== trimmed) return null;
+    return new Set(noradIds);
+  }, [query, appliedQuery, noradIds, response]);
+}
+
+function useSearchIsApplied(): boolean {
+  const query = useMissionStore((state) => state.filters.query);
+  const appliedQuery = useMissionStore((state) => state.searchAppliedQuery);
+  const response = useMissionStore((state) => state.searchResponse);
+  return Boolean(query.trim() && response && appliedQuery === query.trim());
+}
+
 /** Objects surviving the active filters. Drives both the globe and the feed. */
 export function useFilteredObjects(): OrbitalObject[] {
   const objects = useAllObjects();
   const filters = useMissionStore((state) => state.filters);
   const riskByNorad = useRiskByNorad();
+  const searchNoradIds = useAppliedSearchNorads();
 
   return useMemo(
-    () => filterObjects(objects, filters, riskByNorad),
-    [objects, filters, riskByNorad],
+    () => filterObjects(objects, filters, riskByNorad, searchNoradIds),
+    [objects, filters, riskByNorad, searchNoradIds],
   );
 }
 
 /**
- * Conjunctions surviving the active filters, most severe first.
+ * Seeded conjunctions surviving chip filters.
  *
- * Text and orbit-class filters apply via the participants, so searching "ISS"
- * narrows the threat feed as well as the globe.
+ * When a SearchResponse is applied, only document-ID matches are kept so a
+ * live hit is never displayed with an unrelated mock miss distance, Pc, or TCA.
  */
 export function useFilteredConjunctions(): ResolvedConjunction[] {
   const conjunctions = useMissionStore((state) => state.conjunctions);
   const filters = useMissionStore((state) => state.filters);
   const index = useObjectIndex();
+  const searchApplied = useSearchIsApplied();
+  const hitDocIds = useMissionStore((state) => state.searchHitDocIds);
 
   return useMemo(() => {
+    const allowedDocs = searchApplied ? new Set(hitDocIds) : null;
+
     const resolved: ResolvedConjunction[] = conjunctions.map((conjunction) => ({
       conjunction,
       primary: index.get(conjunction.primary_norad) ?? null,
@@ -125,6 +142,8 @@ export function useFilteredConjunctions(): ResolvedConjunction[] {
     }));
 
     const filtered = resolved.filter(({ conjunction, primary, secondary }) => {
+      if (allowedDocs && !allowedDocs.has(conjunction.id)) return false;
+
       if (
         filters.riskLevels.length > 0 &&
         !filters.riskLevels.includes(conjunction.risk_level)
@@ -150,17 +169,6 @@ export function useFilteredConjunctions(): ResolvedConjunction[] {
         if (!hit) return false;
       }
 
-      if (filters.query.trim()) {
-        const needle = filters.query.toLowerCase().trim();
-        const inText =
-          conjunction.id.toLowerCase().includes(needle) ||
-          (conjunction.text_blob ?? "").toLowerCase().includes(needle);
-        const inParticipants = participants.some((object) =>
-          matchesText(object, filters.query),
-        );
-        if (!inText && !inParticipants) return false;
-      }
-
       return true;
     });
 
@@ -171,7 +179,19 @@ export function useFilteredConjunctions(): ResolvedConjunction[] {
       if (bySeverity !== 0) return bySeverity;
       return a.conjunction.miss_km - b.conjunction.miss_km;
     });
-  }, [conjunctions, filters, index]);
+  }, [conjunctions, filters, index, searchApplied, hitDocIds]);
+}
+
+/** Live SearchHits for the current query, chip-filtered. Null when idle. */
+export function useActiveSearchHits(): SearchHit[] | null {
+  const filters = useMissionStore((state) => state.filters);
+  const applied = useSearchIsApplied();
+  const response = useMissionStore((state) => state.searchResponse);
+
+  return useMemo(() => {
+    if (!applied || !response) return null;
+    return response.hits.filter((hit) => hitMatchesChips(hit, filters));
+  }, [applied, response, filters]);
 }
 
 /** The conjunction backing the current selection, if any. */

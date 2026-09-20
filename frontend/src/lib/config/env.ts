@@ -18,7 +18,7 @@ export const env = {
 } as const;
 
 /**
- * True once a backend exists. Phase 1 is always false, which is what makes
- * `getDataService()` return the mock implementation.
+ * True when a public API base URL is configured. Search then uses
+ * `httpDataService`; catalogue lists stay on the seeded mock.
  */
 export const isLiveApiEnabled = env.apiBaseUrl.length > 0;
