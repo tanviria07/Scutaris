@@ -1,0 +1,10 @@
+elasticsearch>=8.13
+fastapi
+uvicorn[standard]
+httpx
+python-dotenv
+numpy
+sentence-transformers  # fallback embeddings only (MiniLM 384-dim)
+langchain-core
+langgraph
+langchain-openai
