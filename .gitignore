@@ -7,3 +7,4 @@ __pycache__/
 data/raw/*.json
 data/normalized/*.json
 .DS_Store
+backend/static/grok_cache/*.png

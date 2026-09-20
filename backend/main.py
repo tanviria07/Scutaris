@@ -38,6 +38,7 @@ ALLOWED_ORIGINS = [
 ]
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+GROK_CACHE_DIR = STATIC_DIR / "grok_cache"
 
 app = FastAPI(
     title="Scutaris API",
@@ -54,6 +55,13 @@ app.add_middleware(
 )
 
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
+GROK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+# More specific mount first so /static/grok_cache is not swallowed by /static.
+app.mount(
+    "/static/grok_cache",
+    StaticFiles(directory=GROK_CACHE_DIR),
+    name="grok_cache",
+)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 app.include_router(search.router)
