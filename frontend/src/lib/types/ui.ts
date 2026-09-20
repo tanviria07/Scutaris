@@ -33,3 +33,17 @@ export interface Selection {
 }
 
 export type QualityTier = "high" | "medium" | "low";
+
+/**
+ * Natural-language explanation of a single threat, rendered by GrokExplainSlot.
+ * Frontend-only — not part of the FastAPI contract in contracts/types.ts.
+ */
+export interface ThreatExplanation {
+  conjunctionId: string;
+  headline: string;
+  paragraphs: string[];
+  recommendation: string;
+  /** Populated only once Grok Imagine is wired up. */
+  imageUrl: string | null;
+  source: "mock" | "grok";
+}

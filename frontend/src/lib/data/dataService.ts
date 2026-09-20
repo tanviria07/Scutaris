@@ -4,11 +4,8 @@ import type {
   DebrisObject,
   SatelliteObject,
 } from "@/lib/types/orbital";
-import type {
-  SearchRequest,
-  SearchResponse,
-  ThreatExplanation,
-} from "@/lib/types/api";
+import type { SearchRequest, SearchResponse } from "@contracts";
+import type { ThreatExplanation } from "@/lib/types/ui";
 import { isLiveApiEnabled } from "@/lib/config/env";
 import { mockDataService } from "./mockDataService";
 
@@ -27,7 +24,7 @@ export interface ScutarisDataService {
   listConjunctions(): Promise<Conjunction[]>;
   getConstraints(noradId: string): Promise<ConstraintsDoc | null>;
 
-  /** Elastic seam. Phase 1 filters locally and reports `source: "mock"`. */
+  /** Elastic seam. Phase 1 filters locally and reports `mock: true`. */
   search(request: SearchRequest): Promise<SearchResponse>;
 
   /** Grok Imagine seam. Phase 1 returns canned prose and a null image. */
@@ -36,9 +33,9 @@ export interface ScutarisDataService {
 
 export function getDataService(): ScutarisDataService {
   if (isLiveApiEnabled) {
-    // Phase 2: return httpDataService once the FastAPI contract in
-    // lib/types/api.ts is implemented. Until then the mock is the only
-    // implementation, so fall through rather than fail at runtime.
+    // Phase 2: return httpDataService once the FastAPI contract is wired.
+    // Until then the mock is the only implementation, so fall through
+    // rather than fail at runtime.
     return mockDataService;
   }
   return mockDataService;

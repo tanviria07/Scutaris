@@ -3,12 +3,8 @@ import type {
   DebrisObject,
   SatelliteObject,
 } from "@/lib/types/orbital";
-import type {
-  SearchHit,
-  SearchRequest,
-  SearchResponse,
-  ThreatExplanation,
-} from "@/lib/types/api";
+import type { SearchHit, SearchRequest, SearchResponse } from "@contracts";
+import type { ThreatExplanation } from "@/lib/types/ui";
 import { RISK_LABEL } from "@/lib/orbital/risk";
 import { formatUtc } from "@/lib/utils/format";
 import type { ScutarisDataService } from "./dataService";
@@ -79,6 +75,7 @@ function toHit(
     norad_id: object.norad_id,
     name: object.name,
     score: Number(score.toFixed(6)),
+    risk_level: null,
     orbit_class: object.orbit_class,
     lat: object.lat,
     lon: object.lon,
@@ -144,10 +141,11 @@ export const mockDataService: ScutarisDataService = {
     return {
       query_expanded: assetNorad
         ? { asset_norad: assetNorad, intent: "debris_near_asset" }
-        : undefined,
+        : { asset_norad: null, intent: "general_search" },
       hits,
       took_ms: tookMs,
-      source: "mock",
+      mock: true,
+      note: "Local fixture search (no Elasticsearch).",
     };
   },
 

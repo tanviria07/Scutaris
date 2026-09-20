@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ImageIcon, Sparkles } from "lucide-react";
 import type { Conjunction } from "@/lib/types/orbital";
-import type { ThreatExplanation } from "@/lib/types/api";
+import type { ThreatExplanation } from "@/lib/types/ui";
 import { getDataService } from "@/lib/data/dataService";
 import { PhaseBadge } from "@/components/ui/Badge";
 

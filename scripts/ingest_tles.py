@@ -9,6 +9,7 @@ Usage:
     python scripts/ingest_tles.py --limit 200
     python scripts/ingest_tles.py --satellites-only
     python scripts/ingest_tles.py --group active --index scutaris-satellites
+    python scripts/ingest_tles.py --group active --index scutaris-satellites --clear --limit 3000
 """
 
 from __future__ import annotations
@@ -29,9 +30,25 @@ logger = logging.getLogger("scutaris.ingest_tles")
 ISS_NORAD = "25544"
 
 
+def _clear_index(index: str) -> int:
+    """Delete every document in `index`. Does not drop the index mapping."""
+    client = get_es_client()
+    if not client.indices.exists(index=index):
+        print(f"  {index}: does not exist yet, nothing to clear")
+        return 0
+    result = client.delete_by_query(
+        index=index,
+        query={"match_all": {}},
+        refresh=True,
+        conflicts="proceed",
+    )
+    deleted = int(result.get("deleted", 0))
+    print(f"  {index}: deleted {deleted} docs")
+    return deleted
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for the ingest runner."""
-    settings = get_settings()
     parser = argparse.ArgumentParser(description="Ingest CelesTrak data into Scutaris")
     parser.add_argument(
         "--group",
@@ -48,8 +65,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--limit",
         type=int,
-        default=settings.ingest_limit,
-        help=f"max objects per group (default {settings.ingest_limit})",
+        default=5000,
+        help="max objects per group (default 5000)",
+    )
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="delete all documents from each target index before ingesting",
     )
     parser.add_argument(
         "--satellites-only", action="store_true", help="skip the debris group"
@@ -116,6 +138,18 @@ async def run(args: argparse.Namespace) -> int:
         print(f"ERROR: cannot reach Elasticsearch: {type(exc).__name__}: {exc}")
         print("Run `python scripts/setup_elastic.py` first and check your .env")
         return 1
+
+    if args.clear:
+        seen: set[str] = set()
+        print("Clearing target indices (--clear)")
+        for _, target_index in jobs:
+            if target_index in seen:
+                continue
+            seen.add(target_index)
+            try:
+                _clear_index(target_index)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [{target_index}] clear FAILED: {type(exc).__name__}: {exc}")
 
     results = []
     for group, target_index in jobs:
