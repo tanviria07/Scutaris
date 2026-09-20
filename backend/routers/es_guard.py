@@ -23,8 +23,9 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-PING_TIMEOUT_S = 2.0
-#: How long a reachability verdict stays good for.
+PING_TIMEOUT_S = 3.0
+#: How long a successful reachability verdict stays good for.
+#: Failures are not cached — a slow Serverless ping must not poison /search.
 PING_TTL_S = 5.0
 
 _cached_verdict: tuple[float, bool] | None = None
@@ -50,7 +51,10 @@ async def es_available(force: bool = False) -> bool:
             if cached is not None:
                 return cached
         verdict = await _ping()
-        _cached_verdict = (time.monotonic(), verdict)
+        if verdict:
+            _cached_verdict = (time.monotonic(), True)
+        else:
+            _cached_verdict = None
         return verdict
 
 

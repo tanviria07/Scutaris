@@ -30,7 +30,7 @@ from backend.config import get_settings
 logger = logging.getLogger(__name__)
 
 XAI_IMAGES_URL = "https://api.x.ai/v1/images/generations"
-XAI_IMAGE_MODEL = "grok-imagine-image-2.0"
+XAI_IMAGE_MODEL = "grok-2-image"
 
 STATIC_DIR: Path = Path(__file__).resolve().parent / "static"
 MOCK_DIR: Path = STATIC_DIR / "mocks"
@@ -245,24 +245,47 @@ async def _call_xai(prompt: str) -> bytes:
     api_key = os.getenv("XAI_API_KEY", "").strip()
     settings = get_settings()
     timeout = max(settings.http_timeout, 60.0)
-    body = {
-        "model": _xai_model(),
-        "prompt": prompt,
-        "n": 1,
-        "aspect_ratio": "1:1",
-        "response_format": "b64_json",
-    }
+    candidates: list[str] = []
+    for name in (_xai_model(), "grok-2-image", "grok-imagine-image-2.0", "grok-imagine-image"):
+        if name and name not in candidates:
+            candidates.append(name)
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    last_error = ""
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        response = await client.post(_xai_url(), json=body, headers=headers)
-        if response.status_code >= 400:
-            raise ImagineError(
-                f"xAI Imagine HTTP {response.status_code}: {response.text[:300]}"
-            )
-        return await _download_image_bytes(client, response.json())
+        for index, model in enumerate(candidates):
+            body = {
+                "model": model,
+                "prompt": prompt,
+                "n": 1,
+                "aspect_ratio": "1:1",
+                "response_format": "b64_json",
+            }
+            response = await client.post(_xai_url(), json=body, headers=headers)
+            if response.status_code == 404:
+                last_error = response.text
+                remaining = candidates[index + 1 :]
+                if remaining:
+                    print(
+                        f"xAI image model fallback: {model!r} returned 404; "
+                        f"trying {remaining[0]!r}"
+                    )
+                    continue
+                print(
+                    f"xAI image model fallback: all candidates 404; "
+                    f"last failure {model!r}"
+                )
+                raise ImagineError(last_error)
+            if response.status_code >= 400:
+                raise ImagineError(
+                    f"xAI Imagine HTTP {response.status_code}: {response.text[:300]}"
+                )
+            if index > 0:
+                print(f"xAI image model fallback succeeded with {model!r}")
+            return await _download_image_bytes(client, response.json())
+    raise ImagineError(last_error or "xAI Imagine request failed")
 
 
 async def generate_image(card_type: str, context: dict) -> dict:
