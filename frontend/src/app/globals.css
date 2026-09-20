@@ -1,0 +1,165 @@
+@import "tailwindcss";
+
+/*
+ * Scutaris orbital-command design system.
+ * Palette is locked by FIX F in docs/HACKMIT_PLAN_v3.md:
+ * teal #5eead4, amber #fbbf24, red #ef4444, dark background.
+ */
+@theme {
+  /* Surfaces */
+  --color-void: #05070d;
+  --color-deep: #070b14;
+  --color-panel: #0b1220;
+  --color-panel-raised: #111a2c;
+
+  /* Hairlines and glow */
+  --color-hairline: rgba(94, 234, 212, 0.14);
+  --color-hairline-strong: rgba(94, 234, 212, 0.32);
+
+  /* Brand + risk */
+  --color-teal: #5eead4;
+  --color-amber: #fbbf24;
+  --color-crimson: #ef4444;
+  --color-slate-low: #64748b;
+
+  /* Text */
+  --color-ink: #e2e8f0;
+  --color-ink-dim: #94a3b8;
+  --color-ink-faint: #64748b;
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* Instrument radii: near-square so panels read as hardware, not cards */
+  --radius-instrument: 2px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Thin instrument scrollbars */
+@supports (scrollbar-width: thin) {
+  .scut-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(94, 234, 212, 0.25) transparent;
+  }
+}
+
+.scut-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scut-scroll::-webkit-scrollbar-thumb {
+  background: rgba(94, 234, 212, 0.25);
+  border-radius: 3px;
+}
+
+.scut-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/*
+ * Panel chrome: hairline border plus a faint inner glow so surfaces read as
+ * backlit instrumentation rather than flat cards.
+ */
+.scut-panel {
+  background: color-mix(in srgb, var(--color-panel) 72%, transparent);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-instrument);
+  backdrop-filter: blur(12px);
+  box-shadow:
+    inset 0 1px 0 0 rgba(94, 234, 212, 0.06),
+    0 8px 32px -12px rgba(0, 0, 0, 0.9);
+}
+
+/* Faint scanline wash over the whole HUD, purely decorative. */
+.scut-scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0 3px,
+    rgba(94, 234, 212, 0.014) 3px 4px
+  );
+}
+
+/* Visible, consistent focus ring on every interactive element. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-teal);
+  outline-offset: 2px;
+  border-radius: var(--radius-instrument);
+}
+
+@keyframes scut-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.scut-pulse {
+  animation: scut-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes scut-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.scut-spin {
+  animation: scut-spin 1.6s linear infinite;
+}
+
+@keyframes scut-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.scut-sweep {
+  animation: scut-sweep 1.4s ease-in-out infinite;
+}
+
+/*
+ * Reduced motion is a hard requirement for Phase 1: kill every ambient
+ * animation. Globe auto-rotation is disabled separately in useReducedMotion.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .scut-pulse,
+  .scut-sweep,
+  .scut-spin {
+    animation: none !important;
+  }
+}
