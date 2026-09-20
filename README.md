@@ -8,12 +8,14 @@ Scutaris is a protective intelligence platform for orbital operations. It ingest
 
 ## Demo Video
 
-[Watch the 3-minute demo](<YOUTUBE_URL_HERE — leave placeholder if not recorded yet>)
+[Watch the 3-minute demo](<YOUTUBE_URL>)
 
 ## Live Demo
 
-- **Frontend:** <VERCEL_URL — leave placeholder>
-- **Backend:** <RAILWAY_URL — leave placeholder>
+- **Frontend:** <FRONTEND_URL>
+- **Backend API:** https://scutaris-api-613545175204.us-central1.run.app
+- **Health:** https://scutaris-api-613545175204.us-central1.run.app/health
+- **Deployed on:** Google Cloud Run (backend) · Vercel (frontend)
 
 ## The Problem
 
@@ -47,7 +49,7 @@ Today, operators manually check dozens of government databases, spreadsheets, an
 
 **Frontend:** Next.js 15 + React Three Fiber + Tailwind v4, deployed on Vercel.
 
-**Backend:** FastAPI + Python 3.12, deployed on Railway.
+**Backend:** FastAPI + Python 3.12, containerized with Docker, deployed on Google Cloud Run (`us-central1`).
 
 ## Sponsor Alignment
 
@@ -66,114 +68,3 @@ Today, operators manually check dozens of government databases, spreadsheets, an
 - **Agent tools** — 5 LangGraph tools query Elasticsearch directly via `es_client.py`
 
 ## Architecture
-
-```
-CelesTrak TLEs (live)
-       │
-       ▼
-[Ingest pipeline]  →  normalize  →  Jina v3 embeddings
-       │
-       ▼
-[Elasticsearch Cloud 9.6.0]
-  ├─ scutaris-satellites      (6,368 docs)
-  ├─ scutaris-debris          (2,671 docs)
-  ├─ scutaris-conjunctions    (5,010 docs)
-  └─ scutaris-constraints     (7 docs)
-       │
-       ├──────────────┬───────────────┐
-       ▼              ▼               ▼
-[Frontend]      [FastAPI]       [Agent tools]
-Next.js 15      /search         search_satellites
-R3F globe       /esql           find_conjunctions
-Grok Imagine    /visualize      search_debris
-Risk cards      /agent/stream   query_constraints
-                                assess_risk
-       │
-       ▼
-5-agent LangGraph pipeline (xAI Grok-4.20)
-SCOUT → ANALYST → PLANNER → SAFETY → OPS_BRIEF
-       │
-       ▼
-Operator brief + validated maneuver
-```
-
-## Tech Stack
-
-**Backend:** Python 3.12, FastAPI, uvicorn, elasticsearch-py 8.19, httpx, LangGraph, langchain-openai, pydantic v2
-**Frontend:** Next.js 15, React 19, React Three Fiber, Tailwind v4, TypeScript
-**Search:** Elastic Cloud Serverless 9.6.0, Jina v3 embeddings (1024-dim), BM25 + kNN + RRF
-**LLM:** xAI Grok-4.20 (`grok-4.20-0309-non-reasoning`) via OpenAI-compatible endpoint
-**Visual:** xAI Grok Imagine for risk card generation
-**Deployment:** Vercel (frontend), Railway (backend)
-
-## Running Locally
-
-### Prerequisites
-- Python 3.12
-- Node.js 20+
-- Elastic Cloud account (free tier works)
-- Jina AI API key
-- xAI API key
-
-### Backend
-
-```bash
-cd backend
-python -m venv ../.venv
-source ../.venv/bin/activate   # Windows: ..\.venv\Scripts\activate.ps1
-pip install -r requirements.txt
-
-# Fill .env with:
-#   ELASTIC_CLOUD_ID, ELASTIC_API_KEY
-#   JINA_API_KEY, EMBED_DIMS=1024
-#   XAI_API_KEY, LLM_API_KEY (same value), LLM_BASE_URL=https://api.x.ai/v1
-#   LLM_MODEL=grok-4.20-0309-non-reasoning
-
-python scripts/setup_elastic.py       # create 4 indices
-python scripts/ingest_tles.py         # ingest CelesTrak data
-python scripts/build_conjunctions.py  # build conjunction index
-python scripts/seed_demo_conjunctions.py  # seed demo data
-
-uvicorn backend.main:app --reload --port 8000
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-echo "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000" > .env.local
-npm run dev
-```
-
-Open `http://localhost:3000`.
-
-Try: `show me high-risk debris near the ISS`
-
-## API Endpoints
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/health` | Liveness + ES status |
-| POST | `/search` | Hybrid search (BM25 + kNN + RRF) |
-| POST | `/esql` | ES\|QL queries (allowlisted to `scutaris-*`) |
-| POST | `/visualize` | Grok Imagine risk card generation |
-| GET | `/agent/stream` | SSE 5-agent pipeline |
-
-## Project Docs
-
-- `docs/HACKMIT_PLAN.md` — Grok Bot v1 planning
-- `docs/HACKMIT_PLAN_v2.md` — Grok Bot v2 corrections
-- `docs/HACKMIT_PLAN_v3.md` — Grok Bot v3 final plan
-- `docs/HACKMIT_PLAN_v4_team_split.md` — Grok Bot v4 team runbook
-- `docs/GROK_USAGE.md` — Grok Bot iteration proof
-- `docs/ELASTIC_SETUP.md` — Elasticsearch index details
-
-## Team
-
-- **Md. Tanvir Ibn Alam** — backend, Elasticsearch integration, Grok Imagine, deployment
-- **Ashraful Islam Tutul** — frontend, ES ingestion, LangGraph agents
-
-## License
-
-MIT
