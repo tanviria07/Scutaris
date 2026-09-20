@@ -14,7 +14,8 @@ import type {
   TimelineState,
 } from "@/lib/types/ui";
 import { EMPTY_FILTERS } from "@/lib/types/ui";
-import type { SearchResponse } from "@contracts";
+import type { SearchHit, SearchResponse, VisualizeResponse } from "@contracts";
+import type { VisualizeTarget } from "@/lib/data/visualizeContext";
 import { SIM_EPOCH_MS } from "@/lib/data/fixtures/rng";
 
 /**
@@ -48,7 +49,15 @@ interface MissionState {
   // --- Interaction ---
   selectedNoradId: string | null;
   selectedConjunctionId: string | null;
+  /**
+   * The live hit the operator picked. Held separately from `selectedNoradId`
+   * because most hits have no counterpart in the seeded globe catalogue.
+   */
+  selectedSearchHit: SearchHit | null;
   hoveredNoradId: string | null;
+
+  // --- Grok Imagine card generation ---
+  visualize: VisualizeState;
 
   // --- Controls ---
   filters: Filters;
@@ -67,8 +76,19 @@ interface MissionState {
 
   select: (noradId: string | null, conjunctionId?: string | null) => void;
   selectConjunction: (conjunction: Conjunction) => void;
+  selectSearchHit: (hit: SearchHit, seededNoradId?: string | null) => void;
+  clearSelectedSearchHit: () => void;
+  /** Sync-driven: drops a stale orbit selection, leaves the hit panel alone. */
   clearSelection: () => void;
+  /** Operator-driven close: drops everything the right-hand panel shows. */
+  dismissSelection: () => void;
   setHovered: (noradId: string | null) => void;
+
+  requestVisualize: (target: VisualizeTarget) => void;
+  regenerateVisualize: () => void;
+  setVisualizeResult: (response: VisualizeResponse) => void;
+  setVisualizeError: (message: string) => void;
+  closeVisualize: () => void;
 
   setQuery: (query: string) => void;
   setFilters: (partial: Partial<Filters>) => void;
@@ -94,6 +114,22 @@ interface MissionState {
   setAutoRotateEnabled: (enabled: boolean) => void;
 }
 
+/**
+ * One Grok Imagine request, owned by `GrokVisualizeLayer`.
+ *
+ * `attempt` is the regenerate counter: together with `target.key` it identifies
+ * the in-flight generation, so a response that lands after the operator moved
+ * on is discarded instead of attached to the new selection.
+ */
+export interface VisualizeState {
+  open: boolean;
+  status: "idle" | "loading" | "ready" | "error";
+  target: VisualizeTarget | null;
+  attempt: number;
+  response: VisualizeResponse | null;
+  error: string | null;
+}
+
 /** Timeline horizon: 48 hours forward from the simulation epoch. */
 export const TIMELINE_MAX_MINUTES = 48 * 60;
 
@@ -101,6 +137,21 @@ const INITIAL_TIMELINE: TimelineState = {
   offsetMinutes: 0,
   playing: false,
   speed: 10,
+};
+
+const IDLE_VISUALIZE: VisualizeState = {
+  open: false,
+  status: "idle",
+  target: null,
+  attempt: 0,
+  response: null,
+  error: null,
+};
+
+/** Any selection change invalidates a card generated for the old selection. */
+const CLEARED_VISUALIZE = {
+  selectedSearchHit: null as SearchHit | null,
+  visualize: IDLE_VISUALIZE,
 };
 
 const CLEARED_SEARCH = {
@@ -111,6 +162,7 @@ const CLEARED_SEARCH = {
   searchHitNoradIds: [] as string[],
   searchHitDocIds: [] as string[],
   searchFallback: false,
+  ...CLEARED_VISUALIZE,
 };
 
 export const useMissionStore = create<MissionState>((set) => ({
@@ -124,7 +176,9 @@ export const useMissionStore = create<MissionState>((set) => ({
 
   selectedNoradId: null,
   selectedConjunctionId: null,
+  selectedSearchHit: null,
   hoveredNoradId: null,
+  visualize: IDLE_VISUALIZE,
 
   filters: EMPTY_FILTERS,
   timeline: INITIAL_TIMELINE,
@@ -137,26 +191,52 @@ export const useMissionStore = create<MissionState>((set) => ({
   setLoadError: (loadError) => set({ loadError, loading: false }),
 
   select: (noradId, conjunctionId = null) =>
-    set({ selectedNoradId: noradId, selectedConjunctionId: conjunctionId }),
+    set({
+      selectedNoradId: noradId,
+      selectedConjunctionId: conjunctionId,
+      ...CLEARED_VISUALIZE,
+    }),
 
   selectConjunction: (conjunction) =>
     set({
       selectedNoradId: conjunction.primary_norad,
       selectedConjunctionId: conjunction.id,
+      ...CLEARED_VISUALIZE,
     }),
+
+  // A hit may also exist in the seeded catalogue; when it does, the caller
+  // passes its NORAD id so the orbit highlight still works.
+  selectSearchHit: (hit, seededNoradId = null) =>
+    set({
+      ...CLEARED_VISUALIZE,
+      selectedSearchHit: hit,
+      selectedNoradId: seededNoradId,
+      selectedConjunctionId: null,
+    }),
+
+  clearSelectedSearchHit: () => set(CLEARED_VISUALIZE),
 
   clearSelection: () =>
     set({ selectedNoradId: null, selectedConjunctionId: null }),
 
+  dismissSelection: () =>
+    set({
+      selectedNoradId: null,
+      selectedConjunctionId: null,
+      ...CLEARED_VISUALIZE,
+    }),
+
   setHovered: (hoveredNoradId) => set({ hoveredNoradId }),
 
   // A selection made against the previous result set is never valid for a new
-  // one, so changing the query drops it before the next response arrives.
+  // one, so changing the query drops it — including a live search hit — before
+  // the next response arrives.
   setQuery: (query) =>
     set((state) => ({
       filters: { ...state.filters, query },
       selectedNoradId: null,
       selectedConjunctionId: null,
+      ...CLEARED_VISUALIZE,
       ...(query.trim() ? {} : CLEARED_SEARCH),
     })),
 
@@ -200,9 +280,56 @@ export const useMissionStore = create<MissionState>((set) => ({
       searchHitNoradIds: [],
       searchHitDocIds: [],
       searchFallback: false,
+      ...CLEARED_VISUALIZE,
     }),
 
   clearSearch: () => set(CLEARED_SEARCH),
+
+  // Generation is always operator-triggered: nothing here runs on selection.
+  // `attempt` only ever climbs, so pressing the button twice on the same target
+  // is a new generation rather than a duplicate of the one in flight.
+  requestVisualize: (target) =>
+    set((state) => ({
+      visualize: {
+        open: true,
+        status: "loading",
+        target,
+        attempt:
+          (state.visualize.target?.key === target.key
+            ? state.visualize.attempt
+            : 0) + 1,
+        response: null,
+        error: null,
+      },
+    })),
+
+  regenerateVisualize: () =>
+    set((state) =>
+      state.visualize.target
+        ? {
+            visualize: {
+              ...state.visualize,
+              open: true,
+              status: "loading",
+              attempt: state.visualize.attempt + 1,
+              response: null,
+              error: null,
+            },
+          }
+        : {},
+    ),
+
+  setVisualizeResult: (response) =>
+    set((state) => ({
+      visualize: { ...state.visualize, status: "ready", response, error: null },
+    })),
+
+  setVisualizeError: (error) =>
+    set((state) => ({
+      visualize: { ...state.visualize, status: "error", response: null, error },
+    })),
+
+  closeVisualize: () => set({ visualize: IDLE_VISUALIZE }),
 
   setTimelineOffset: (offsetMinutes) =>
     set((state) => ({

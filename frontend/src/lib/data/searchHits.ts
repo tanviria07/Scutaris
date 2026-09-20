@@ -11,6 +11,29 @@ function isOrbitClass(value: string): value is OrbitClass {
   return (ORBIT_CLASSES as readonly string[]).includes(value);
 }
 
+/** Stable identity for a hit across re-renders and result sets. */
+export function hitKey(hit: SearchHit): string {
+  return `${hit.index}:${hit.id ?? hit.norad_id ?? hit.name ?? ""}`;
+}
+
+/**
+ * The conjunction participants a hit names explicitly, or null.
+ *
+ * Only the two exact backend shapes are read — `25544 vs 33775` in `name` and
+ * `25544_33775` in `id`. Anything else yields null rather than a guess.
+ */
+export function parseConjunctionPair(
+  hit: Pick<SearchHit, "name" | "id">,
+): { primary: string; secondary: string } | null {
+  const named = hit.name?.match(CONJUNCTION_NAME_RE);
+  if (named) return { primary: named[1], secondary: named[2] };
+
+  const identified = hit.id?.match(CONJUNCTION_ID_RE);
+  if (identified) return { primary: identified[1], secondary: identified[2] };
+
+  return null;
+}
+
 export function collectHitIds(hits: readonly SearchHit[]): {
   noradIds: string[];
   docIds: string[];
@@ -19,20 +42,13 @@ export function collectHitIds(hits: readonly SearchHit[]): {
   const docIds = new Set<string>();
 
   for (const hit of hits) {
-    if (hit.id) {
-      docIds.add(hit.id);
-      const paired = hit.id.match(CONJUNCTION_ID_RE);
-      if (paired) {
-        noradIds.add(paired[1]);
-        noradIds.add(paired[2]);
-      }
-    }
+    if (hit.id) docIds.add(hit.id);
     if (hit.norad_id) noradIds.add(hit.norad_id);
 
-    const named = hit.name?.match(CONJUNCTION_NAME_RE);
-    if (named) {
-      noradIds.add(named[1]);
-      noradIds.add(named[2]);
+    const pair = parseConjunctionPair(hit);
+    if (pair) {
+      noradIds.add(pair.primary);
+      noradIds.add(pair.secondary);
     }
   }
 

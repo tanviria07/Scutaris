@@ -10,15 +10,17 @@ import {
   useFilteredConjunctions,
   useObjectIndex,
 } from "@/lib/store/selectors";
-import { indexLabel } from "@/lib/data/searchHits";
+import { hitKey, indexLabel, parseConjunctionPair } from "@/lib/data/searchHits";
 import { ThreatFeedItem } from "./ThreatFeedItem";
 
 function LiveHitRow({
   hit,
+  selected,
   onSelect,
 }: {
   hit: SearchHit;
-  onSelect: (noradId: string | null) => void;
+  selected: boolean;
+  onSelect: (hit: SearchHit) => void;
 }) {
   const label = hit.name ?? hit.norad_id ?? hit.id ?? "Untitled hit";
   const meta = [
@@ -33,8 +35,11 @@ function LiveHitRow({
     <li>
       <button
         type="button"
-        onClick={() => onSelect(hit.norad_id)}
-        className="w-full px-3 py-2 text-left transition-colors hover:bg-white/[0.04]"
+        onClick={() => onSelect(hit)}
+        aria-current={selected ? "true" : undefined}
+        className={`w-full px-3 py-2 text-left transition-colors hover:bg-white/[0.04] ${
+          selected ? "border-l-2 border-teal bg-teal/[0.07]" : ""
+        }`}
       >
         <p className="truncate font-mono text-[11px] text-ink">{label}</p>
         <p className="mt-0.5 truncate font-mono text-[9px] tracking-wide text-ink-faint uppercase">
@@ -64,7 +69,8 @@ export function ThreatFeed() {
     (state) => state.selectedConjunctionId,
   );
   const selectConjunction = useMissionStore((state) => state.selectConjunction);
-  const select = useMissionStore((state) => state.select);
+  const selectSearchHit = useMissionStore((state) => state.selectSearchHit);
+  const selectedSearchHit = useMissionStore((state) => state.selectedSearchHit);
   const setHovered = useMissionStore((state) => state.setHovered);
   const offsetMinutes = useMissionStore((state) => state.timeline.offsetMinutes);
   const loading = useMissionStore((state) => state.loading);
@@ -122,10 +128,14 @@ export function ThreatFeed() {
     [activeIndex, commit, entries.length],
   );
 
-  function selectLiveHit(noradId: string | null) {
-    if (noradId && objectIndex.has(noradId)) {
-      select(noradId, null);
-    }
+  // A hit is selectable whether or not it exists in the seeded globe; the
+  // NORAD id is only passed along when it does, to drive the orbit highlight.
+  function selectLiveHit(hit: SearchHit) {
+    const pair = parseConjunctionPair(hit);
+    const seeded = [hit.norad_id, pair?.primary].find(
+      (id): id is string => Boolean(id) && objectIndex.has(id as string),
+    );
+    selectSearchHit(hit, seeded ?? null);
   }
 
   let emptyCopy: string | null = null;
@@ -153,8 +163,12 @@ export function ThreatFeed() {
         >
           {liveHits.map((hit, index) => (
             <LiveHitRow
-              key={`${hit.index}:${hit.id ?? hit.norad_id ?? index}`}
+              key={`${hitKey(hit)}:${index}`}
               hit={hit}
+              selected={
+                selectedSearchHit !== null &&
+                hitKey(selectedSearchHit) === hitKey(hit)
+              }
               onSelect={selectLiveHit}
             />
           ))}

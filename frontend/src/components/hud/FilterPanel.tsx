@@ -79,27 +79,20 @@ export function FilterPanel() {
   const setFilters = useMissionStore((state) => state.setFilters);
   const resetFilters = useMissionStore((state) => state.resetFilters);
 
-  const active =
-    filters.orbitClasses.length +
-      filters.riskLevels.length +
-      filters.kinds.length >
-      0 || filters.query.length > 0;
-
   return (
     <Panel
       title="Filters"
       as="section"
       action={
-        active ? (
-          <button
-            type="button"
-            onClick={resetFilters}
-            className="flex items-center gap-1 font-mono text-[9px] tracking-[0.1em] text-ink-faint uppercase transition-colors hover:text-teal"
-          >
-            <RotateCcw className="size-2.5" aria-hidden="true" />
-            Reset
-          </button>
-        ) : null
+        <button
+          type="button"
+          onClick={resetFilters}
+          aria-label="Reset filters and search"
+          className="flex items-center gap-1 font-mono text-[9px] tracking-[0.1em] text-ink-faint uppercase transition-colors hover:text-teal"
+        >
+          <RotateCcw className="size-2.5" aria-hidden="true" />
+          Reset
+        </button>
       }
     >
       <div className="flex flex-col gap-3 p-3">

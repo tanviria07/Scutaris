@@ -12,6 +12,8 @@ import { StatsStrip } from "./StatsStrip";
 import { FilterPanel } from "./FilterPanel";
 import { ThreatFeed } from "./ThreatFeed";
 import { SelectedThreatPanel } from "./SelectedThreatPanel";
+import { SelectedHitPanel } from "./SelectedHitPanel";
+import { GrokVisualizeLayer } from "./GrokVisualizeLayer";
 import { TimelineControls } from "./TimelineControls";
 
 /**
@@ -38,7 +40,16 @@ export function MissionShell() {
   useSelectionSync();
 
   const selected = useSelectedObject();
+  const selectedHit = useMissionStore((state) => state.selectedSearchHit);
   const loadError = useMissionStore((state) => state.loadError);
+
+  // A live hit owns the panel when one is picked: it carries the fields the
+  // operator just searched, even when the seeded catalogue has no such orbit.
+  const detailPanel = selectedHit ? (
+    <SelectedHitPanel hit={selectedHit} />
+  ) : selected ? (
+    <SelectedThreatPanel />
+  ) : null;
 
   return (
     <main className="scut-scanlines relative h-full w-full overflow-hidden bg-void">
@@ -46,7 +57,7 @@ export function MissionShell() {
         <GlobeCanvas />
       </div>
 
-      <div className="pointer-events-none absolute inset-0 flex flex-col">
+      <div className="pointer-events-none absolute inset-0 z-30 flex flex-col">
         <TopBar />
 
         <div className="pointer-events-none flex min-h-0 flex-1 items-stretch gap-3 px-3 pb-3">
@@ -65,13 +76,15 @@ export function MissionShell() {
             </div>
           </div>
 
-          {selected ? (
+          {detailPanel ? (
             <div className="pointer-events-none absolute inset-y-3 right-3 z-20 flex w-[22rem] max-w-[calc(100%-1.5rem)] flex-col xl:static xl:inset-auto xl:z-auto xl:w-[22rem] xl:shrink-0">
-              <SelectedThreatPanel />
+              {detailPanel}
             </div>
           ) : null}
         </div>
       </div>
+
+      <GrokVisualizeLayer />
 
       {loadError ? (
         <div

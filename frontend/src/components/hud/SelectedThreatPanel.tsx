@@ -19,7 +19,9 @@ import {
   formatUtc,
 } from "@/lib/utils/format";
 import { periodMinutesFromAltitude } from "@/lib/orbital/propagate";
+import { riskCardTargetFromConjunction } from "@/lib/data/visualizeContext";
 import { GrokExplainSlot } from "./GrokExplainSlot";
+import { VisualizeButton } from "./VisualizeButton";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -54,7 +56,7 @@ function Section({
 export function SelectedThreatPanel() {
   const object = useSelectedObject();
   const conjunction = useSelectedConjunction();
-  const clearSelection = useMissionStore((state) => state.clearSelection);
+  const dismissSelection = useMissionStore((state) => state.dismissSelection);
   const index = useObjectIndex();
   // Keyed by NORAD id so a result that arrives after the selection moved on
   // is simply ignored rather than briefly rendered against the wrong object.
@@ -98,7 +100,7 @@ export function SelectedThreatPanel() {
       action={
         <button
           type="button"
-          onClick={clearSelection}
+          onClick={dismissSelection}
           aria-label="Close selected threat panel"
           className="text-ink-faint transition-colors hover:text-teal"
         >
@@ -157,6 +159,18 @@ export function SelectedThreatPanel() {
             <Row label="Probability" value={formatPc(conjunction.pc)} />
             <Row label="TCA" value={formatUtc(conjunction.tca_utc)} />
           </Section>
+        ) : null}
+
+        {conjunction ? (
+          <section className="border-t border-[var(--color-hairline)] p-3">
+            <VisualizeButton
+              target={riskCardTargetFromConjunction(
+                conjunction,
+                index.get(conjunction.primary_norad) ?? null,
+                secondary ?? null,
+              )}
+            />
+          </section>
         ) : null}
 
         {constraints ? (
