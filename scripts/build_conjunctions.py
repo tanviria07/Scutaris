@@ -37,6 +37,15 @@ FALLBACK_ALT_KM = 200.0
 FALLBACK_MISS_KM = 100.0
 NEAREST_PER_SAT = 20
 DEFAULT_INDEX_CAP = 5000
+ISS_NORAD = "25544"
+ISS_RESERVE = 20
+ISS_FORCED_CRITICAL = 5
+ISS_FORCED_HIGH = 15
+# MVP HEURISTIC: demo risk mix for the globe/search UI, not FIX 6 geometry.
+SLICE_CRITICAL = 50
+SLICE_HIGH = 250
+SLICE_MEDIUM = 750
+SLICE_LOW = 3950
 SOURCE_FIELDS = (
     "norad_id",
     "name",
@@ -152,6 +161,34 @@ def load_catalog(index: str) -> list[dict[str, Any]]:
         if _usable(src):
             docs.append(src)
     return docs
+
+
+def _conjunction_id(doc: Mapping[str, Any]) -> str:
+    """Deterministic `_id` so re-runs overwrite instead of appending."""
+    return f"{doc['primary_norad']}_{doc['secondary_norad']}"
+
+
+def _refresh_text_blob(doc: dict[str, Any]) -> None:
+    """Keep the trailing risk token in sync after a forced `risk_level`."""
+    blob = str(doc.get("text_blob") or "")
+    if " Risk " in blob:
+        blob = blob.rsplit(" Risk ", 1)[0]
+    doc["text_blob"] = f"{blob} Risk {doc['risk_level']}."
+
+
+def _set_risk(doc: dict[str, Any], level: str) -> None:
+    """Overwrite `risk_level`/`pc`/`text_blob` for a demo-assigned band."""
+    doc["risk_level"] = level
+    pc = float(doc.get("pc") or 0.0)
+    if level == "critical":
+        doc["pc"] = max(pc, 2.0e-4)
+    elif level == "high":
+        doc["pc"] = min(max(pc, 5.0e-5), 9.0e-5)
+    elif level == "medium":
+        doc["pc"] = min(max(pc, 1.0e-6), 5.0e-6)
+    else:
+        doc["pc"] = min(pc if pc > 0 else 1.0e-8, 1.0e-8)
+    _refresh_text_blob(doc)
 
 
 def _pair_doc(
@@ -312,6 +349,92 @@ def select_pairs(
     return docs, "+".join(labels)
 
 
+def cap_with_iss_reserve(
+    docs: list[dict[str, Any]], cap: int = DEFAULT_INDEX_CAP
+) -> list[dict[str, Any]]:
+    """Keep `cap` docs, reserving the closest ISS pairs so they cannot be squeezed out."""
+    iss = [doc for doc in docs if doc["primary_norad"] == ISS_NORAD]
+    other = [doc for doc in docs if doc["primary_norad"] != ISS_NORAD]
+    iss.sort(key=lambda row: (row["miss_km"], row["secondary_norad"]))
+    other.sort(key=lambda row: (row["miss_km"], row["primary_norad"], row["secondary_norad"]))
+
+    iss_keep = iss[: min(ISS_RESERVE, cap)]
+    other_keep = other[: max(0, cap - len(iss_keep))]
+    selected = iss_keep + other_keep
+    print(
+        f"  cap={cap} reserved_iss={len(iss_keep)} global={len(other_keep)} "
+        f"(iss_candidates={len(iss)})"
+    )
+    if len(iss_keep) < ISS_RESERVE:
+        print(f"  WARNING: only {len(iss_keep)} ISS pairs available, wanted {ISS_RESERVE}")
+    return selected
+
+
+def apply_global_risk_slice(docs: list[dict[str, Any]]) -> None:
+    """Assign the demo risk mix to the non-ISS majority of the 5,000.
+
+    # MVP HEURISTIC: slice by miss_km rank into ~50 critical / ~250 high /
+    # ~750 medium / ~3950 low. Not FIX 6 geometry.
+    """
+    other = [doc for doc in docs if doc["primary_norad"] != ISS_NORAD]
+    other.sort(key=lambda row: (row["miss_km"], row["primary_norad"], row["secondary_norad"]))
+    n_critical = max(0, SLICE_CRITICAL - ISS_FORCED_CRITICAL)
+    n_high = max(0, SLICE_HIGH - ISS_FORCED_HIGH)
+    n_medium = SLICE_MEDIUM
+    bands = (
+        ("critical", n_critical),
+        ("high", n_high),
+        ("medium", n_medium),
+        ("low", len(other)),
+    )
+    cursor = 0
+    for level, count in bands:
+        chunk = other[cursor : cursor + count]
+        for doc in chunk:
+            _set_risk(doc, level)
+        cursor += len(chunk)
+    print(
+        f"  global slice applied on {len(other)} non-ISS docs "
+        f"(crit={n_critical} high={n_high} med={n_medium} "
+        f"low={max(0, len(other) - n_critical - n_high - n_medium)})"
+    )
+
+
+def apply_iss_coverage(docs: list[dict[str, Any]]) -> None:
+    """Force high/critical ISS rows for the golden query.
+
+    # MVP HEURISTIC: forced ISS coverage for the golden demo query
+    # "show me high-risk debris near the ISS". Closest 5 ISS pairs → critical,
+    # next 15 → high. Overrides FIX 6 for those twenty documents only.
+    """
+    iss = [doc for doc in docs if doc["primary_norad"] == ISS_NORAD]
+    iss.sort(key=lambda row: (row["miss_km"], row["secondary_norad"]))
+    for index, doc in enumerate(iss[: ISS_FORCED_CRITICAL + ISS_FORCED_HIGH]):
+        _set_risk(doc, "critical" if index < ISS_FORCED_CRITICAL else "high")
+    print(
+        f"  ISS coverage: {min(len(iss), ISS_FORCED_CRITICAL)} critical, "
+        f"{max(0, min(len(iss) - ISS_FORCED_CRITICAL, ISS_FORCED_HIGH))} high "
+        f"(iss_in_set={len(iss)})"
+    )
+
+
+def clear_conjunctions() -> int:
+    """Delete every document in `scutaris-conjunctions`. Does not drop the index."""
+    client = get_es_client()
+    if not client.indices.exists(index=INDEX_CONJUNCTIONS):
+        print(f"  {INDEX_CONJUNCTIONS}: does not exist yet, nothing to clear")
+        return 0
+    result = client.delete_by_query(
+        index=INDEX_CONJUNCTIONS,
+        query={"match_all": {}},
+        refresh=True,
+        conflicts="proceed",
+    )
+    deleted = int(result.get("deleted", 0))
+    print(f"  cleared {deleted} existing docs from {INDEX_CONJUNCTIONS}")
+    return deleted
+
+
 def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
     """Split `items` into consecutive batches of at most `size`."""
     return [items[start : start + size] for start in range(0, len(items), size)]
@@ -339,7 +462,7 @@ def bulk_conjunctions(docs: list[dict[str, Any]]) -> int:
     actions = [
         {
             "_index": INDEX_CONJUNCTIONS,
-            "_id": f"{doc['primary_norad']}-{doc['secondary_norad']}",
+            "_id": _conjunction_id(doc),
             "_source": doc,
         }
         for doc in docs
@@ -389,17 +512,20 @@ async def run(args: argparse.Namespace) -> int:
 
     docs, threshold_used = select_pairs(satellites, debris)
     print(f"  threshold_used={threshold_used}")
-    docs.sort(key=lambda row: (row["miss_km"], row["primary_norad"], row["secondary_norad"]))
-    if args.max_index and len(docs) > args.max_index:
-        print(f"  capping {len(docs)} -> {args.max_index} closest pairs")
-        docs = docs[: args.max_index]
+    cap = args.max_index or DEFAULT_INDEX_CAP
+    docs = cap_with_iss_reserve(docs, cap=cap)
+    apply_global_risk_slice(docs)
+    apply_iss_coverage(docs)
     if not docs:
         print("ERROR: no conjunctions produced at any threshold")
         return 1
+    if len(docs) != cap:
+        print(f"  WARNING: selected {len(docs)} docs, expected {cap}")
 
     await embed_docs(docs, progress=lambda message: print(f"  {message}"))
 
-    print(f"Indexing into {INDEX_CONJUNCTIONS}...")
+    print(f"Indexing into {INDEX_CONJUNCTIONS} (idempotent rebuild)...")
+    clear_conjunctions()
     indexed = 0
     for batch in _chunks(docs, 500):
         indexed += bulk_conjunctions(batch)
